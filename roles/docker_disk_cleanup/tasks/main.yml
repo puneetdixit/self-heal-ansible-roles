@@ -1,0 +1,98 @@
+---
+- name: Ensure Docker is installed and accessible
+  ansible.builtin.command: docker info
+  register: docker_info
+  changed_when: false
+  failed_when: docker_info.rc != 0
+
+- name: Gather Docker disk usage before cleanup
+  ansible.builtin.command: docker system df
+  register: docker_df_before
+  changed_when: false
+
+- name: Display Docker disk usage before cleanup
+  ansible.builtin.debug:
+    var: docker_df_before.stdout_lines
+
+- name: Get root filesystem usage percentage
+  ansible.builtin.shell: |
+    df --output=pcent {{ docker_data_root }} | tail -1 | tr -d ' %'
+  register: disk_usage_pct
+  changed_when: false
+
+- name: Set fact for current disk usage
+  ansible.builtin.set_fact:
+    current_disk_usage: "{{ disk_usage_pct.stdout | int }}"
+
+- name: Display current disk usage
+  ansible.builtin.debug:
+    msg: "Current disk usage on {{ docker_data_root }} is {{ current_disk_usage }}% (threshold {{ docker_disk_threshold }}%)"
+
+- name: Prune stopped containers
+  ansible.builtin.command: docker container prune -f
+  register: container_prune
+  changed_when: "'Total reclaimed space: 0B' not in container_prune.stdout"
+  when:
+    - docker_prune_containers | bool
+    - (current_disk_usage | int) >= (docker_disk_threshold | int) or docker_force_cleanup | bool
+
+- name: Prune dangling images
+  ansible.builtin.command: docker image prune -f
+  register: dangling_image_prune
+  changed_when: "'Total reclaimed space: 0B' not in dangling_image_prune.stdout"
+  when:
+    - docker_prune_images | bool
+    - not docker_prune_all_unused_images | bool
+    - (current_disk_usage | int) >= (docker_disk_threshold | int) or docker_force_cleanup | bool
+
+- name: Prune all unused images
+  ansible.builtin.command: docker image prune -a -f --filter "until={{ docker_image_prune_until }}"
+  register: all_image_prune
+  changed_when: "'Total reclaimed space: 0B' not in all_image_prune.stdout"
+  when:
+    - docker_prune_images | bool
+    - docker_prune_all_unused_images | bool
+    - (current_disk_usage | int) >= (docker_disk_threshold | int) or docker_force_cleanup | bool
+
+- name: Prune unused networks
+  ansible.builtin.command: docker network prune -f
+  register: network_prune
+  changed_when: "'Total reclaimed space: 0B' not in network_prune.stdout or network_prune.stdout != ''"
+  when:
+    - docker_prune_networks | bool
+    - (current_disk_usage | int) >= (docker_disk_threshold | int) or docker_force_cleanup | bool
+
+- name: Prune unused volumes
+  ansible.builtin.command: docker volume prune -f
+  register: volume_prune
+  changed_when: "'Total reclaimed space: 0B' not in volume_prune.stdout"
+  when:
+    - docker_prune_volumes | bool
+    - (current_disk_usage | int) >= (docker_disk_threshold | int) or docker_force_cleanup | bool
+
+- name: Prune build cache
+  ansible.builtin.command: docker builder prune -f --filter "until={{ docker_buildcache_prune_until }}"
+  register: buildcache_prune
+  changed_when: "'Total reclaimed space: 0B' not in buildcache_prune.stdout"
+  when:
+    - docker_prune_build_cache | bool
+    - (current_disk_usage | int) >= (docker_disk_threshold | int) or docker_force_cleanup | bool
+
+- name: Truncate large container log files
+  ansible.builtin.shell: |
+    find {{ docker_data_root }}/containers/ -name '*-json.log' -size +{{ docker_max_log_size_mb }}M -exec truncate -s 0 {} \;
+  register: log_truncate
+  changed_when: log_truncate.stdout != ''
+  when:
+    - docker_truncate_logs | bool
+    - (current_disk_usage | int) >= (docker_disk_threshold | int) or docker_force_cleanup | bool
+  notify: Restart docker
+
+- name: Gather Docker disk usage after cleanup
+  ansible.builtin.command: docker system df
+  register: docker_df_after
+  changed_when: false
+
+- name: Display Docker disk usage after cleanup
+  ansible.builtin.debug:
+    var: docker_df_after.stdout_lines
