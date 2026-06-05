@@ -1,0 +1,29 @@
+---
+# Path to Docker data root used for disk usage checks
+docker_data_root: /var/lib/docker
+
+# Disk usage percentage threshold above which cleanup runs
+docker_disk_threshold: 80
+
+# Force cleanup regardless of disk usage threshold
+docker_force_cleanup: false
+
+# Toggle individual prune operations
+docker_prune_containers: true
+docker_prune_images: true
+docker_prune_networks: true
+docker_prune_volumes: false
+docker_prune_build_cache: true
+
+# Image pruning behavior
+# When true, prune all unused images (not only dangling)
+docker_prune_all_unused_images: false
+# Only remove images older than this duration
+docker_image_prune_until: 168h
+
+# Build cache pruning age filter
+docker_buildcache_prune_until: 168h
+
+# Container log management
+docker_truncate_logs: true
+docker_max_log_size_mb: 100
