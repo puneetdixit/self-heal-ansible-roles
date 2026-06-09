@@ -1,0 +1,20 @@
+---
+# Disk usage percentage at or above which cleanup is triggered
+docker_cleanup_threshold_pct: 80
+
+# Force cleanup regardless of current disk usage
+docker_force_cleanup: false
+
+# Which prune operations to perform
+docker_prune_containers: true
+docker_prune_images: true
+docker_prune_networks: true
+docker_prune_volumes: false
+docker_prune_build_cache: true
+
+# Prune all unused images, not just dangling ones
+docker_prune_all_images: false
+
+# Only remove objects created before this duration (e.g. '24h', '168h').
+# Leave empty to disable the time-based filter.
+docker_prune_until: ""
