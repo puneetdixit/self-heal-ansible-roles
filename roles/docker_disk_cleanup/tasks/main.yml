@@ -1,0 +1,118 @@
+---
+- name: Ensure Docker is installed and command is available
+  ansible.builtin.command: docker --version
+  register: docker_version_check
+  changed_when: false
+  failed_when: docker_version_check.rc != 0
+
+- name: Gather Docker root directory location
+  ansible.builtin.command: docker info --format '{{ '{{' }}.DockerRootDir{{ '}}' }}'
+  register: docker_root_dir
+  changed_when: false
+
+- name: Set Docker data directory fact
+  ansible.builtin.set_fact:
+    docker_data_dir: "{{ docker_root_dir.stdout | default('/var/lib/docker') }}"
+
+- name: Get filesystem usage for Docker data directory
+  ansible.builtin.shell: >-
+    df --output=pcent {{ docker_data_dir }} | tail -1 | tr -dc '0-9'
+  register: docker_disk_usage
+  changed_when: false
+
+- name: Set disk usage percentage fact
+  ansible.builtin.set_fact:
+    docker_disk_usage_pct: "{{ docker_disk_usage.stdout | int }}"
+
+- name: Display current Docker disk usage
+  ansible.builtin.debug:
+    msg: "Docker data directory {{ docker_data_dir }} is at {{ docker_disk_usage_pct }}% usage (threshold: {{ docker_cleanup_threshold_pct }}%)."
+
+- name: Capture Docker disk usage before cleanup
+  ansible.builtin.command: docker system df
+  register: docker_df_before
+  changed_when: false
+  when: docker_force_cleanup | bool or (docker_disk_usage_pct | int >= docker_cleanup_threshold_pct | int)
+
+- name: Remove stopped containers
+  ansible.builtin.command: >-
+    docker container prune -f
+    {% if docker_prune_until is defined and docker_prune_until %}--filter until={{ docker_prune_until }}{% endif %}
+  register: container_prune
+  changed_when: "'Total reclaimed space: 0B' not in container_prune.stdout"
+  when:
+    - docker_prune_containers | bool
+    - docker_force_cleanup | bool or (docker_disk_usage_pct | int >= docker_cleanup_threshold_pct | int)
+  notify: Log cleanup completed
+
+- name: Remove dangling images
+  ansible.builtin.command: >-
+    docker image prune -f
+    {% if docker_prune_all_images | bool %}-a{% endif %}
+    {% if docker_prune_until is defined and docker_prune_until %}--filter until={{ docker_prune_until }}{% endif %}
+  register: image_prune
+  changed_when: "'Total reclaimed space: 0B' not in image_prune.stdout"
+  when:
+    - docker_prune_images | bool
+    - docker_force_cleanup | bool or (docker_disk_usage_pct | int >= docker_cleanup_threshold_pct | int)
+  notify: Log cleanup completed
+
+- name: Remove unused networks
+  ansible.builtin.command: >-
+    docker network prune -f
+    {% if docker_prune_until is defined and docker_prune_until %}--filter until={{ docker_prune_until }}{% endif %}
+  register: network_prune
+  changed_when: "network_prune.stdout | length > 0"
+  when:
+    - docker_prune_networks | bool
+    - docker_force_cleanup | bool or (docker_disk_usage_pct | int >= docker_cleanup_threshold_pct | int)
+  notify: Log cleanup completed
+
+- name: Remove unused volumes
+  ansible.builtin.command: docker volume prune -f
+  register: volume_prune
+  changed_when: "'Total reclaimed space: 0B' not in volume_prune.stdout"
+  when:
+    - docker_prune_volumes | bool
+    - docker_force_cleanup | bool or (docker_disk_usage_pct | int >= docker_cleanup_threshold_pct | int)
+  notify: Log cleanup completed
+
+- name: Remove build cache
+  ansible.builtin.command: >-
+    docker builder prune -f
+    {% if docker_prune_until is defined and docker_prune_until %}--filter until={{ docker_prune_until }}{% endif %}
+  register: builder_prune
+  changed_when: "'Total:\t0B' not in builder_prune.stdout and 'Total: 0B' not in builder_prune.stdout"
+  failed_when: false
+  when:
+    - docker_prune_build_cache | bool
+    - docker_force_cleanup | bool or (docker_disk_usage_pct | int >= docker_cleanup_threshold_pct | int)
+  notify: Log cleanup completed
+
+- name: Capture Docker disk usage after cleanup
+  ansible.builtin.command: docker system df
+  register: docker_df_after
+  changed_when: false
+  when: docker_force_cleanup | bool or (docker_disk_usage_pct | int >= docker_cleanup_threshold_pct | int)
+
+- name: Re-check filesystem usage after cleanup
+  ansible.builtin.shell: >-
+    df --output=pcent {{ docker_data_dir }} | tail -1 | tr -dc '0-9'
+  register: docker_disk_usage_post
+  changed_when: false
+  when: docker_force_cleanup | bool or (docker_disk_usage_pct | int >= docker_cleanup_threshold_pct | int)
+
+- name: Display Docker disk usage after cleanup
+  ansible.builtin.debug:
+    msg: "Docker data directory {{ docker_data_dir }} is now at {{ docker_disk_usage_post.stdout | int }}% usage."
+  when:
+    - docker_disk_usage_post is defined
+    - docker_disk_usage_post.stdout is defined
+
+- name: Warn if disk usage still exceeds threshold after cleanup
+  ansible.builtin.debug:
+    msg: "WARNING: Docker disk usage remains at {{ docker_disk_usage_post.stdout | int }}% which is still at or above the threshold of {{ docker_cleanup_threshold_pct }}%. Manual investigation may be required."
+  when:
+    - docker_disk_usage_post is defined
+    - docker_disk_usage_post.stdout is defined
+    - docker_disk_usage_post.stdout | int >= docker_cleanup_threshold_pct | int
