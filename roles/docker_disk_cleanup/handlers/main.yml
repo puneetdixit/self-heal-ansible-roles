@@ -1,0 +1,4 @@
+---
+- name: Log cleanup completed
+  ansible.builtin.debug:
+    msg: "Docker cleanup operation executed on {{ inventory_hostname }}."
